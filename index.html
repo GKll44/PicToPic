@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图转图</title>
+    <style>
+body {
+    font-family: Arial, sans-serif;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+    background: #f0f0f0;
+}
+h1 {
+    text-align: center;
+    color: #333;
+    margin-bottom: 30px;
+}
+.config-section {
+    background: white;
+    padding: 15px;
+    margin-bottom: 20px;
+    display: flex;
+    outline: thick double #bbbbbb;
+    align-items: center;
+    gap: 10px;
+    justify-content: center;
+    flex-wrap: wrap;
+}
+.config-section label {
+    font-weight: bold;
+    color: #555;
+}
+.config-section input[type="number"], .config-section select {
+    width: 80px;
+    padding: 5px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+.config-section select {
+    width: 120px;
+}
+.config-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0 10px;
+}
+.tooltip-container {
+    position: relative;
+    display: inline-block;
+}
+.help-btn {
+    width: 20px;
+    height: 20px;
+    background: black;
+    color: white;
+    border: none;
+    cursor: help;
+    font-size: 14px;
+    font-weight: bold;
+}
+.tooltip-text {
+    visibility: hidden;
+    width: 300px;
+    background-color: #333;
+    color: #fff;
+    text-align: left;
+    border-radius: 6px;
+    padding: 10px;
+    position: absolute;
+    z-index: 1;
+    bottom: 125%;
+    left: 50%;
+    margin-left: -150px;
+    opacity: 0;
+    transition: opacity 0.3s;
+    font-size: 12px;
+    line-height: 1.4;
+    font-weight: normal;
+}
+.tooltip-text::after {
+    content: "";
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -5px;
+    border-width: 5px;
+    border-style: solid;
+    border-color: #333 transparent transparent transparent;
+}
+.tooltip-container:hover .tooltip-text {
+    visibility: visible;
+    opacity: 1;
+}
+.container {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 20px;
+}
+.image-section {
+    flex: 1;
+    background: white;
+    outline: thick double #bbbbbb;
+    padding: 20px;
+}
+.image-section h3 {
+    margin-top: 0;
+    color: #555;
+}
+input[type="file"] {
+    margin-bottom: 10px;
+    width: 100%;
+}
+.preview {
+    width: 100%;
+    height: 200px;
+    border: 2px dashed #ccc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 10px;
+    background: #fafafa;
+    position: relative;
+    overflow: hidden;
+}
+.preview img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+}
+.preview-text {
+    color: #999;
+}
+.dimensions {
+    position: absolute;
+    bottom: 5px;
+    right: 5px;
+    background: rgba(0,0,0,0.7);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+}
+.controls {
+    text-align: center;
+    margin: 20px 0;
+}
+button {
+    padding: 12px 30px;
+    font-size: 16px;
+    background: #ecff98;
+    color: rgb(75, 68, 51);
+    border: none;
+    cursor: pointer;
+    margin: 5px;
+}
+button:hover {
+    background: #bebebe;
+}
+button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+.progress {
+    text-align: center;
+    font-size: 14px;
+    color: #666;
+}
+.result-section {
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    text-align: center;
+}
+canvas {
+    border: 1px solid #ddd;
+    max-width: 100%;
+    image-rendering: pixelated;
+}
+.video-container {
+    margin-top: 20px;
+    display: none;
+}
+video {
+    max-width: 100%;
+    border: 1px solid #ddd;
+}
+.status {
+    margin-top: 10px;
+    font-size: 14px;
+    color: #666;
+}
+.error {
+    color: #f44336;
+    font-weight: bold;
+}
+.info {
+    color: #2196F3;
+    font-size: 12px;
+    margin-top: 5px;
+}
+.checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+.checkbox-group input[type="checkbox"] {
+    width: auto;
+}
+    </style>
+<base target="_blank">
+</head>
+<body>
+    <h1>pic to pic?!</h1>
+
+    <div class="config-section">
+<div class="config-group">
+    <label for="maxSizeInput">缩小尺寸：</label>
+    <input type="number" id="maxSizeInput" value="100" min="20" max="200">
+    <div class="tooltip-container">
+<button class="help-btn">?</button>
+<div class="tooltip-text">
+    缩小图片是为了加快计算速度并减少内存使用。原始图片可能有几百万像素，直接计算会非非非非常慢且可能崩。<br><br>
+</div>
+    </div>
+    <span class="info" id="pixelCountInfo">预计像素数: 10,000</span>
+</div>
+
+<div class="config-group">
+    <label for="easingSelect">缓动：</label>
+    <select id="easingSelect">
+<option value="linear">线性 Linear</option>
+<option value="easeInQuad">渐入 Ease In</option>
+<option value="easeOutQuad">渐出 Ease Out</option>
+<option value="easeInOutQuad" selected>渐入渐出 Ease In-Out</option>
+<option value="easeOutBack">回弹 Back</option>
+<option value="easeOutElastic">弹性 Elastic</option>
+<option value="easeOutBounce">弹跳 Bounce</option>
+    </select>
+    <div class="tooltip-container">
+<button class="help-btn">?</button>
+<div class="tooltip-text">
+    <strong>缓动函数说明：</strong><br>
+    • 线性：匀速运动<br>
+    • 渐入：开始慢，逐渐加速<br>
+    • 渐出：开始快，逐渐减速<br>
+    • 渐入渐出：开始和结束慢，中间快<br>
+    • 回弹：结束时超过目标再回弹<br>
+    • 弹性：弹性振荡效果<br>
+    • 弹跳：像球落地一样的弹跳
+</div>
+    </div>
+</div>
+
+<div class="config-group">
+    <label for="durationInput">持续秒：</label>
+    <input type="number" id="durationInput" value="5" min="1" max="30" step="0.5">
+</div>
+    </div>
+
+    <div class="container">
+<div class="image-section">
+    <h3>原图</h3>
+    <input type="file" id="sourceInput" accept="image/*">
+    <div class="preview" id="sourcePreview">
+<span class="preview-text">选择</span>
+    </div>
+</div>
+
+<div class="image-section">
+    <h3>转到</h3>
+    <input type="file" id="targetInput" accept="image/*">
+    <div class="preview" id="targetPreview">
+<span class="preview-text">选择</span>
+    </div>
+</div>
+    </div>
+
+    <div class="controls">
+<button id="convertBtn" onclick="startConversion()">开转！</button>
+    </div>
+
+    <div class="progress" id="progress"></div>
+
+    <div class="result-section" id="resultSection" style="display: none;">
+<h3>转换结果</h3>
+<canvas id="previewCanvas"></canvas>
+<div class="status" id="status"></div>
+
+<div class="video-container" id="videoContainer">
+    <h3>动画</h3>
+    <video id="resultVideo" controls loop></video>
+    <br>
+    <button onclick="downloadVideo()">下载视频</button>
+</div>
+    </div>
+
+    <script src="PicToPic.js"></script>
+</body>
+</html>
