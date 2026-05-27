@@ -52,11 +52,10 @@ h1 {
     display: inline-block;
 }
 .help-btn {
-    width: 20px;
-    height: 20px;
     background: black;
     color: white;
     border: none;
+    border-radius: 50%;
     cursor: help;
     font-size: 14px;
     font-weight: bold;
@@ -66,7 +65,6 @@ h1 {
     width: 300px;
     background-color: #333;
     color: #fff;
-    text-align: left;
     border-radius: 6px;
     padding: 10px;
     position: absolute;
@@ -75,7 +73,6 @@ h1 {
     left: 50%;
     margin-left: -150px;
     opacity: 0;
-    transition: opacity 0.3s;
     font-size: 12px;
     line-height: 1.4;
     font-weight: normal;
@@ -88,7 +85,6 @@ h1 {
     margin-left: -5px;
     border-width: 5px;
     border-style: solid;
-    border-color: #333 transparent transparent transparent;
 }
 .tooltip-container:hover .tooltip-text {
     visibility: visible;
@@ -177,7 +173,6 @@ button:disabled {
 }
 canvas {
     border: 1px solid #ddd;
-    max-width: 100%;
     image-rendering: pixelated;
 }
 .video-container {
@@ -187,11 +182,6 @@ canvas {
 video {
     max-width: 100%;
     border: 1px solid #ddd;
-}
-.status {
-    margin-top: 10px;
-    font-size: 14px;
-    color: #666;
 }
 .error {
     color: #f44336;
@@ -210,7 +200,42 @@ video {
 .checkbox-group input[type="checkbox"] {
     width: auto;
 }
+
+/* 实时预览区域样式 */
+.preview-canvas-container {
+    margin-top: 15px;
+    text-align: center;
+    display: none;
+}
+.preview-canvas-container.active {
+    display: block;
+}
+#previewCanvas {
+    border: 2px dashed #ccc;
+    background: #fafafa;
+    cursor: pointer;
+}
+.preview-label {
+    font-size: 12px;
+    color: #888;
+    margin-top: 5px;
+}
+.live-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #2196F3;
+    border-radius: 50%;
+    margin-right: 5px;
+    animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+    0% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.2); }
+    100% { opacity: 1; transform: scale(1); }
+}
     </style>
+<base target="_blank">
 <base target="_blank">
 </head>
 <body>
@@ -232,25 +257,25 @@ video {
 <div class="config-group">
     <label for="easingSelect">缓动：</label>
     <select id="easingSelect">
-<option value="linear">线性 Linear</option>
-<option value="easeInQuad">渐入 Ease In</option>
-<option value="easeOutQuad">渐出 Ease Out</option>
-<option value="easeInOutQuad" selected>渐入渐出 Ease In-Out</option>
-<option value="easeOutBack">回弹 Back</option>
-<option value="easeOutElastic">弹性 Elastic</option>
-<option value="easeOutBounce">弹跳 Bounce</option>
+<option value="linear">Linear</option>
+<option value="easeInQuad">Ease In</option>
+<option value="easeOutQuad">Ease Out</option>
+<option value="easeInOutQuad" selected>Ease In-Out</option>
+<option value="easeOutBack">Back</option>
+<option value="easeOutElastic">Elastic</option>
+<option value="easeOutBounce">Bounce</option>
     </select>
     <div class="tooltip-container">
 <button class="help-btn">?</button>
 <div class="tooltip-text">
     <strong>缓动函数说明：</strong><br>
-    • 线性：匀速运动<br>
-    • 渐入：开始慢，逐渐加速<br>
-    • 渐出：开始快，逐渐减速<br>
-    • 渐入渐出：开始和结束慢，中间快<br>
-    • 回弹：结束时超过目标再回弹<br>
-    • 弹性：弹性振荡效果<br>
-    • 弹跳：像球落地一样的弹跳
+    linear：匀速运动<br>
+    In：开始慢，最后快<br>
+    Out：开始快，最后慢<br>
+    In-Out：开始和结束慢，中间快<br>
+    Back：结束时超过目标再回弹<br>
+    Elastic：弹性振荡效果<br>
+    Bounce：像球落地一样的弹跳哦
 </div>
     </div>
 </div>
@@ -279,25 +304,25 @@ video {
 </div>
     </div>
 
+    <!-- 实时预览画布 -->
+    <div class="preview-canvas-container" id="previewContainer">
+        <canvas id="previewCanvas"></canvas>
+        <div class="preview-label">
+        </div>
+    </div>
+
     <div class="controls">
-<button id="convertBtn" onclick="startConversion()">开转！</button>
+        <button id="convertBtn" onclick="generateVideo()">转视频</button>
     </div>
 
     <div class="progress" id="progress"></div>
 
-    <div class="result-section" id="resultSection" style="display: none;">
-<h3>转换结果</h3>
-<canvas id="previewCanvas"></canvas>
-<div class="status" id="status"></div>
-
-<div class="video-container" id="videoContainer">
-    <h3>动画</h3>
-    <video id="resultVideo" controls loop></video>
-    <br>
-    <button onclick="downloadVideo()">下载视频</button>
-</div>
+    <div class="video-container" id="videoContainer">
+        <video id="resultVideo" controls loop></video>
+        <br>
+        <button onclick="downloadVideo()">下载视频</button>
     </div>
 
-    <script src="PicToPic.js"></script>
+    <script src="PicToPic.js"></script> 
 </body>
 </html>
