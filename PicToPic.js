@@ -262,6 +262,16 @@ document.getElementById('easingSelect').addEventListener('change', function() {
     }
 });
 
+let algorithmDebounceTimer = null;
+document.getElementById('algorithmSelect').addEventListener('change', function() {
+    if (algorithmDebounceTimer) clearTimeout(algorithmDebounceTimer);
+    algorithmDebounceTimer = setTimeout(() => {
+        if (sourceImage && targetImage && !isConverting && !isRecording) {
+            startConversion(true);
+        }
+    }, 300);
+});
+
 document.getElementById('durationInput').addEventListener('input', function() {
     if (easingDebounceTimer) clearTimeout(easingDebounceTimer);
     easingDebounceTimer = setTimeout(() => {
@@ -352,6 +362,308 @@ function getPixel(data, x, y, width) {
 // 3. 预计算颜色距离避免重复平方根
 // 4. 多分辨率渐进匹配
 // 5. 使用TypedArray减少GC压力
+
+
+// ==================== 多种像素匹配算法 ====================
+
+
+
+
+// 算法2: 亮度排序映射
+function brightnessSortMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
+    const mapping = [];
+    const sortedSource = [...sourcePixels].sort((a, b) => a.brightness - b.brightness);
+    const sortedTarget = [...targetPixels].sort((a, b) => a.brightness - b.brightness);
+    const count = Math.min(sortedSource.length, sortedTarget.length);
+    for (let i = 0; i < count; i++) {
+        mapping.push({
+            fromX: sortedSource[i].origX,
+            fromY: sortedSource[i].origY,
+            toX: sortedTarget[i].x,
+            toY: sortedTarget[i].y,
+            color: sortedSource[i].color
+        });
+    }
+    for (let i = count; i < targetPixels.length; i++) {
+        const src = sortedSource[i % sortedSource.length];
+        mapping.push({
+            fromX: src.origX,
+            fromY: src.origY,
+            toX: sortedTarget[i].x,
+            toY: sortedTarget[i].y,
+            color: src.color
+        });
+    }
+    return mapping;
+}
+
+// 算法4: 贪婪最近邻
+function greedyNNMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
+    const mapping = [];
+    const used = new Uint8Array(sourcePixels.length);
+
+    for (let ti = 0; ti < targetPixels.length; ti++) {
+        const tp = targetPixels[ti];
+        let bestIdx = -1;
+        let bestScore = Infinity;
+
+        for (let si = 0; si < sourcePixels.length; si++) {
+            if (used[si]) continue;
+            const sp = sourcePixels[si];
+            const dx = sp.origX - tp.x;
+            const dy = sp.origY - tp.y;
+            const spatialDist = dx * dx + dy * dy;
+
+            const rDiff = sp.color[0] - tp.color[0];
+            const gDiff = sp.color[1] - tp.color[1];
+            const bDiff = sp.color[2] - tp.color[2];
+            const colorDist = (rDiff * rDiff + gDiff * gDiff + bDiff * bDiff) * 0.1;
+
+            const score = spatialDist + colorDist;
+            if (score < bestScore) {
+                bestScore = score;
+                bestIdx = si;
+            }
+        }
+
+        if (bestIdx !== -1) {
+            used[bestIdx] = 1;
+            const sp = sourcePixels[bestIdx];
+            mapping.push({
+                fromX: sp.origX,
+                fromY: sp.origY,
+                toX: tp.x,
+                toY: tp.y,
+                color: sp.color
+            });
+        }
+    }
+
+    // 补充未映射的目标
+    for (let ti = mapping.length; ti < targetPixels.length; ti++) {
+        const tp = targetPixels[ti];
+        const sp = sourcePixels[ti % sourcePixels.length];
+        mapping.push({
+            fromX: sp.origX,
+            fromY: sp.origY,
+            toX: tp.x,
+            toY: tp.y,
+            color: sp.color
+        });
+    }
+
+    return mapping;
+}
+
+
+// 算法3: 最近颜色匹配 - 纯颜色距离，不考虑空间位置
+function nearestColorMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
+    const mapping = [];
+    const used = new Uint8Array(sourcePixels.length);
+
+    // 预计算源像素的颜色，避免重复访问
+    for (let ti = 0; ti < targetPixels.length; ti++) {
+        const tp = targetPixels[ti];
+        let bestIdx = -1;
+        let bestDist = Infinity;
+
+        // 遍历所有未使用的源像素，找颜色最接近的
+        for (let si = 0; si < sourcePixels.length; si++) {
+            if (used[si]) continue;
+            const sp = sourcePixels[si];
+
+            // 纯颜色距离（RGB欧氏距离）
+            const rDiff = sp.color[0] - tp.color[0];
+            const gDiff = sp.color[1] - tp.color[1];
+            const bDiff = sp.color[2] - tp.color[2];
+            const colorDist = rDiff * rDiff + gDiff * gDiff + bDiff * bDiff;
+
+            if (colorDist < bestDist) {
+                bestDist = colorDist;
+                bestIdx = si;
+            }
+        }
+
+        if (bestIdx !== -1) {
+            used[bestIdx] = 1;
+            const sp = sourcePixels[bestIdx];
+            mapping.push({
+                fromX: sp.origX,
+                fromY: sp.origY,
+                toX: tp.x,
+                toY: tp.y,
+                color: sp.color
+            });
+        }
+    }
+
+    // 补充未映射的目标（如果源像素不够）
+    for (let ti = mapping.length; ti < targetPixels.length; ti++) {
+        const tp = targetPixels[ti];
+        const sp = sourcePixels[ti % sourcePixels.length];
+        mapping.push({
+            fromX: sp.origX,
+            fromY: sp.origY,
+            toX: tp.x,
+            toY: tp.y,
+            color: sp.color
+        });
+    }
+
+    return mapping;
+}
+
+// 算法7: Voronoi区域匹配
+function voronoiMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
+    const NUM_SITES = Math.min(16, Math.floor(Math.sqrt(sourcePixels.length)));
+
+    // 随机选择Voronoi中心点
+    function pickSites(pixels, count, w, h) {
+        const sites = [];
+        const step = Math.floor(pixels.length / count);
+        for (let i = 0; i < count; i++) {
+            const idx = Math.min(i * step + Math.floor(Math.random() * step), pixels.length - 1);
+            sites.push({
+                x: pixels[idx].origX !== undefined ? pixels[idx].origX : pixels[idx].x,
+                y: pixels[idx].origY !== undefined ? pixels[idx].origY : pixels[idx].y,
+                color: pixels[idx].color,
+                idx: i
+            });
+        }
+        return sites;
+    }
+
+    const sourceSites = pickSites(sourcePixels, NUM_SITES, sw, sh);
+    const targetSites = pickSites(targetPixels, NUM_SITES, tw, th);
+
+    // 为每个像素分配Voronoi区域
+    function assignRegions(pixels, sites, w, h, isSource) {
+        const regions = new Array(sites.length).fill(null).map(() => []);
+        for (const p of pixels) {
+            const px = isSource ? p.origX : p.x;
+            const py = isSource ? p.origY : p.y;
+            let bestSite = 0;
+            let bestDist = Infinity;
+            for (let s = 0; s < sites.length; s++) {
+                const dx = px - sites[s].x;
+                const dy = py - sites[s].y;
+                const dist = dx * dx + dy * dy;
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestSite = s;
+                }
+            }
+            regions[bestSite].push(p);
+        }
+        return regions;
+    }
+
+    const sourceRegions = assignRegions(sourcePixels, sourceSites, sw, sh, true);
+    const targetRegions = assignRegions(targetPixels, targetSites, tw, th, false);
+
+    const mapping = [];
+    const used = new Uint8Array(sourcePixels.length);
+
+    // 在对应区域内匹配
+    for (let r = 0; r < NUM_SITES; r++) {
+        const sReg = sourceRegions[r];
+        const tReg = targetRegions[r];
+
+        for (let ti = 0; ti < tReg.length; ti++) {
+            const tp = tReg[ti];
+            let bestIdx = -1;
+            let bestScore = Infinity;
+
+            for (const sp of sReg) {
+                if (used[sp.idx]) continue;
+                const dx = sp.origX - tp.x;
+                const dy = sp.origY - tp.y;
+                const spatial = dx * dx + dy * dy;
+                const rDiff = sp.color[0] - tp.color[0];
+                const gDiff = sp.color[1] - tp.color[1];
+                const bDiff = sp.color[2] - tp.color[2];
+                const color = (rDiff*rDiff + gDiff*gDiff + bDiff*bDiff) * 0.1;
+                const score = spatial + color;
+                if (score < bestScore) {
+                    bestScore = score;
+                    bestIdx = sp.idx;
+                }
+            }
+
+            if (bestIdx !== -1) {
+                used[bestIdx] = 1;
+                const sp = sourcePixels[bestIdx];
+                mapping.push({
+                    fromX: sp.origX,
+                    fromY: sp.origY,
+                    toX: tp.x,
+                    toY: tp.y,
+                    color: sp.color
+                });
+            }
+        }
+    }
+
+    // 未匹配的用全局兜底
+    const unmatchedTargets = [];
+    for (let r = 0; r < NUM_SITES; r++) {
+        for (const tp of targetRegions[r]) {
+            const alreadyMapped = mapping.some(m => m.toX === tp.x && m.toY === tp.y);
+            if (!alreadyMapped) unmatchedTargets.push(tp);
+        }
+    }
+
+    for (const tp of unmatchedTargets) {
+        let bestIdx = -1;
+        let bestScore = Infinity;
+        for (let si = 0; si < sourcePixels.length; si++) {
+            if (used[si]) continue;
+            const sp = sourcePixels[si];
+            const dx = sp.origX - tp.x;
+            const dy = sp.origY - tp.y;
+            const spatial = dx * dx + dy * dy;
+            const rDiff = sp.color[0] - tp.color[0];
+            const gDiff = sp.color[1] - tp.color[1];
+            const bDiff = sp.color[2] - tp.color[2];
+            const color = (rDiff*rDiff + gDiff*gDiff + bDiff*bDiff) * 0.05;
+            const score = spatial + color;
+            if (score < bestScore) {
+                bestScore = score;
+                bestIdx = si;
+            }
+        }
+        if (bestIdx !== -1) {
+            used[bestIdx] = 1;
+            const sp = sourcePixels[bestIdx];
+            mapping.push({
+                fromX: sp.origX,
+                fromY: sp.origY,
+                toX: tp.x,
+                toY: tp.y,
+                color: sp.color
+            });
+        }
+    }
+
+    return mapping;
+}
+
+// 算法调度器
+function runMappingAlgorithm(algorithm, sourcePixels, targetPixels, sw, sh, tw, th) {
+    switch (algorithm) {
+        case 'brightnessSort':
+            return brightnessSortMapping(sourcePixels, targetPixels, sw, sh, tw, th);
+        case 'greedyNN':
+            return greedyNNMapping(sourcePixels, targetPixels, sw, sh, tw, th);
+        case 'nearestColor':
+            return nearestColorMapping(sourcePixels, targetPixels, sw, sh, tw, th);
+        case 'voronoi':
+            return voronoiMapping(sourcePixels, targetPixels, sw, sh, tw, th);
+        case 'kdTreeColor':
+        default:
+            return optimizeMapping(sourcePixels, targetPixels, sw, sh, tw, th);
+    }
+}
 
 function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, targetWidth, targetHeight) {
     const mapping = [];
@@ -683,7 +995,8 @@ async function startConversion(autoPreview = false) {
                     origX: x,
                     origY: y,
                     color: color,
-                    brightness: (color[0] * 299 + color[1] * 587 + color[2] * 114) / 1000
+                    brightness: (color[0] * 299 + color[1] * 587 + color[2] * 114) / 1000,
+                    idx: sourcePixels.length
                 });
             }
         }
@@ -742,7 +1055,8 @@ async function startConversion(autoPreview = false) {
         await new Promise(r => setTimeout(r, 0));
 
         const startTime = performance.now();
-        mappingData = optimizeMapping(matchedSources, targetPixels, sw, sh, width, height);
+        const selectedAlgorithm = document.getElementById('algorithmSelect').value;
+        mappingData = runMappingAlgorithm(selectedAlgorithm, matchedSources, targetPixels, sw, sh, width, height);
         const matchTime = performance.now() - startTime;
         console.log(`匹配耗时: ${matchTime.toFixed(2)}ms`);
 
