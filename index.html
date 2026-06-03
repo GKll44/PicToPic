@@ -237,6 +237,8 @@ video {
     </style>
 <base target="_blank">
 <base target="_blank">
+<base target="_blank">
+<base target="_blank">
 </head>
 <body>
     <h1>pic to pic?!</h1>
@@ -275,7 +277,7 @@ video {
     In-Out：开始和结束慢，中间快<br>
     Back：结束时超过目标再回弹<br>
     Elastic：弹性振荡效果<br>
-    Bounce：像球落地一样的弹跳哦
+    Bounce：像球落地一样的弹跳
 </div>
     </div>
 </div>
@@ -283,6 +285,28 @@ video {
 <div class="config-group">
     <label for="durationInput">持续秒：</label>
     <input type="number" id="durationInput" value="5" min="1" max="30" step="0.5">
+</div>
+
+<div class="config-group">
+    <label for="algorithmSelect">算法：</label>
+    <select id="algorithmSelect">
+        <option value="kdTreeColor" selected>颜色空间+KD树</option>
+        <option value="brightnessSort">亮度排序映射</option>
+        <option value="greedyNN">贪婪最近邻</option>
+        <option value="nearestColor">最近颜色匹配</option>
+        <option value="voronoi">Voronoi区域匹配</option>
+    </select>
+    <div class="tooltip-container">
+        <button class="help-btn">?</button>
+        <div class="tooltip-text">
+            <strong>匹配算法说明：</strong><br>
+            <strong>颜色空间+KD树</strong>：默认算法，颜色分桶+空间KD树<br>
+            <strong>亮度排序映射</strong>：按亮度排序后一一对应<br>
+            <strong>贪婪最近邻</strong>：简单贪婪策略，每个像素找最近的未用源像素<br>
+            <strong>最近颜色匹配</strong>：按RGB颜色距离匹配，颜色最像的像素互相移动，效果最佳也是移动量最大的一个<br>
+            <strong>Voronoi区域匹配</strong>：基于Voronoi图的区域化匹配(不建议)
+        </div>
+    </div>
 </div>
     </div>
 
