@@ -255,7 +255,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // ==================== 原有功能 ====================
 
 document.getElementById('maxSizeInput').addEventListener('input', function() {
-    const size = parseInt(this.value) || 100;
+    const size = parseInt(this.value) || 256;
     document.getElementById('pixelCountInfo').textContent = 
         `预计最大像素数: ${(size * size).toLocaleString()}`;
     autoReprocessImages();
@@ -310,7 +310,7 @@ function handleFile(file, type) {
     reader.onload = function(e) {
         const img = new Image();
         img.onload = function() {
-            const maxSize = parseInt(document.getElementById('maxSizeInput').value) || 100;
+            const maxSize = parseInt(document.getElementById('maxSizeInput').value) || 256;
             if (type === 'source') {
                 sourceImage = resizeImage(img, sourceCanvas, maxSize);
                 updatePreview('sourcePreview', sourceCanvas, img);
@@ -1060,51 +1060,141 @@ async function generateVideo() {
     if (btn) btn.disabled = true;
 
     const progress = document.getElementById('progress');
-
-    const mapping = window.currentMapping;
-    const width = window.currentWidth;
-    const height = window.currentHeight;
-
+    const previewCanvas = document.getElementById('previewCanvas');
     const easingFn = currentEasingFn;
     const duration = currentDuration;
     const holdFirst = true;
     const holdLast = true;
+    const width = window.currentWidth;
+    const height = window.currentHeight;
+
+    // 保存原始预览尺寸
+    const originalPreviewWidth = previewCanvas.width;
+    const originalPreviewHeight = previewCanvas.height;
 
     try {
-        const canvas = document.getElementById('previewCanvas');
-        const stream = canvas.captureStream(30);
-        const mediaRecorder = new MediaRecorder(stream, {
-            mimeType: 'video/webm;codecs=vp9',
-            videoBitsPerSecond: 8000000
-        });
-
-        const chunks = [];
-        mediaRecorder.ondataavailable = e => {
-            if (e.data.size > 0) chunks.push(e.data);
-        };
-
-        mediaRecorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'video/webm' });
-            resultBlob = blob;
-            const url = URL.createObjectURL(blob);
-            const video = document.getElementById('resultVideo');
-            video.src = url;
-            document.getElementById('videoContainer').style.display = 'block';
-            if (progress) progress.textContent = '视频生成完成！';
-            isRecording = false;
-            if (btn) btn.disabled = false;
-        };
-
-        mediaRecorder.onerror = (e) => {
-            console.error('录制失败:', e);
-            isRecording = false;
-            if (btn) btn.disabled = false;
-        };
-
         const fps = 30;
         const holdFrames = Math.round(0.5 * fps);
         const animFrames = Math.round(duration * fps);
         const totalFrames = (holdFirst ? holdFrames : 0) + animFrames + (holdLast ? holdFrames : 0);
+
+        if (progress) progress.textContent = '准备录制...';
+
+        // 检测浏览器支持的录制格式，优先 MP4
+        const mimeTypes = [
+            'video/mp4;codecs=avc1.42E01E',
+            'video/mp4;codecs=avc1',
+            'video/mp4',
+            'video/webm;codecs=vp9',
+            'video/webm;codecs=vp8',
+            'video/webm'
+        ];
+
+        let selectedMimeType = null;
+        for (const mt of mimeTypes) {
+            if (MediaRecorder.isTypeSupported(mt)) {
+                selectedMimeType = mt;
+                break;
+            }
+        }
+
+        if (!selectedMimeType) {
+            alert('您的浏览器不支持视频录制');
+            isRecording = false;
+            if (btn) btn.disabled = false;
+            return;
+        }
+
+        const isMp4 = selectedMimeType.includes('mp4');
+        const fileExt = isMp4 ? 'mp4' : 'webm';
+
+        if (progress) progress.textContent = `使用格式: ${selectedMimeType.split(';')[0].toUpperCase()}，准备高清录制...`;
+
+        // 关键修复：临时将 previewCanvas 放大到原始分辨率进行录制
+        // 这样使用同一个 WebGL 上下文，避免 buffer 绑定问题
+        previewCanvas.width = width;
+        previewCanvas.height = height;
+        gl.viewport(0, 0, width, height);
+        updatePointSize(width, height, width, height);
+
+        // 重新上传数据到当前上下文（确保 buffer 正确绑定）
+        uploadPixelData(window.currentMapping, width, height);
+        updatePointSize(width, height, width, height);
+
+        if (progress) progress.textContent = `录制分辨率: ${width}x${height}，开始转视频...`;
+
+        const stream = previewCanvas.captureStream(fps);
+
+        // 码率：MP4 用 16Mbps，WebM 用 8Mbps
+        const bitsPerSecond = isMp4 ? 16000000 : 8000000;
+        let mediaRecorder;
+        try {
+            mediaRecorder = new MediaRecorder(stream, {
+                mimeType: selectedMimeType,
+                videoBitsPerSecond: bitsPerSecond
+            });
+        } catch (e) {
+            // 如果创建失败（比如码率太高），尝试默认配置
+            console.warn('MediaRecorder 创建失败，尝试默认配置:', e);
+            try {
+                mediaRecorder = new MediaRecorder(stream, {
+                    mimeType: selectedMimeType
+                });
+            } catch (e2) {
+                // 如果还是失败，降级到 webm
+                if (isMp4) {
+                    selectedMimeType = 'video/webm;codecs=vp9';
+                    mediaRecorder = new MediaRecorder(stream, { mimeType: selectedMimeType });
+                } else {
+                    throw e2;
+                }
+            }
+        }
+
+        const chunks = [];
+        let recorderError = null;
+
+        mediaRecorder.ondataavailable = e => {
+            if (e.data.size > 0) chunks.push(e.data);
+        };
+
+        mediaRecorder.onerror = (e) => {
+            recorderError = e;
+            console.error('录制错误:', e);
+        };
+
+        mediaRecorder.onstop = () => {
+            // 恢复预览 canvas 尺寸
+            const displayScale = Math.min(500 / width, 500 / height, 15);
+            previewCanvas.width = Math.round(width * displayScale);
+            previewCanvas.height = Math.round(height * displayScale);
+            gl.viewport(0, 0, previewCanvas.width, previewCanvas.height);
+            updatePointSize(width, height, previewCanvas.width, previewCanvas.height);
+            // 重新上传数据
+            uploadPixelData(window.currentMapping, width, height);
+            updatePointSize(width, height, previewCanvas.width, previewCanvas.height);
+            // 渲染一帧预览
+            renderWebGLFrame(1);
+
+            if (recorderError) {
+                if (progress) progress.textContent = '录制失败: ' + (recorderError.message || '编码错误');
+                isRecording = false;
+                if (btn) btn.disabled = false;
+                return;
+            }
+
+            const blobType = isMp4 ? 'video/mp4' : 'video/webm';
+            const blob = new Blob(chunks, { type: blobType });
+            resultBlob = blob;
+            resultBlobExt = fileExt;
+            const url = URL.createObjectURL(blob);
+            const video = document.getElementById('resultVideo');
+            video.src = url;
+            document.getElementById('videoContainer').style.display = 'block';
+            if (progress) progress.textContent = isMp4 ? `MP4 生成完成！分辨率: ${width}x${height}` : `视频生成完成！(WebM 格式，分辨率: ${width}x${height})`;
+            isRecording = false;
+            if (btn) btn.disabled = false;
+        };
 
         if (progress) progress.textContent = '转视频 (0%)...';
 
@@ -1123,7 +1213,6 @@ async function generateVideo() {
             } else {
                 const animFrame = holdFirst ? frame - holdFrames : frame;
                 t = animFrame / animFrames;
-                t = easingFn(t);
             }
 
             renderWebGLFrame(t);
@@ -1137,12 +1226,26 @@ async function generateVideo() {
         }
 
         setTimeout(() => {
-            mediaRecorder.stop();
+            if (mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
         }, 100);
 
     } catch (err) {
         console.error(err);
-        if (progress) progress.textContent = '录制失败';
+        if (progress) progress.textContent = '录制失败: ' + (err.message || '未知错误');
+
+        // 出错时恢复预览尺寸
+        const displayScale = Math.min(500 / width, 500 / height, 15);
+        previewCanvas.width = Math.round(width * displayScale);
+        previewCanvas.height = Math.round(height * displayScale);
+        if (gl) {
+            gl.viewport(0, 0, previewCanvas.width, previewCanvas.height);
+            uploadPixelData(window.currentMapping, width, height);
+            updatePointSize(width, height, previewCanvas.width, previewCanvas.height);
+            renderWebGLFrame(1);
+        }
+
         isRecording = false;
         if (btn) btn.disabled = false;
     }
@@ -1150,10 +1253,11 @@ async function generateVideo() {
 
 function downloadVideo() {
     if (!resultBlob) return;
+    const ext = typeof resultBlobExt !== 'undefined' ? resultBlobExt : 'webm';
     const url = URL.createObjectURL(resultBlob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'pixel-shift-animation.webm';
+    a.download = 'pixel-shift-animation.' + ext;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

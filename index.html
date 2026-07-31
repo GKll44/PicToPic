@@ -5,18 +5,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>图转图</title>
     <link rel="stylesheet" href="style.css"> <!-- 引入样式表 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
 <base target="_blank">
 <base target="_blank">
 <base target="_blank">
 <base target="_blank">
 </head>
 <body>
-    <h1>pic to pic?!</h1>
+    <h1>pic to pic?!
+        <i class="fa fa-picture-o" style="font-size:48px;"></i>
+    </h1>
+    
 
     <div class="config-section">
 <div class="config-group">
     <label for="maxSizeInput">缩小尺寸：</label>
-    <input type="number" id="maxSizeInput" value="100" min="20" max="200">
+    <input type="number" id="maxSizeInput" value="256" min="32" max="512">
     <div class="tooltip-container">
 <button class="help-btn">?</button>
 <div class="tooltip-text">
@@ -59,9 +64,9 @@
 
 <div class="config-group">
     <label for="algorithmSelect">算法：</label>
-    <select id="algorithmSelect">
-        <option value="kdTreeColor" selected>颜色空间+KD树</option>
-        <option value="brightnessSort">亮度排序映射</option>
+    <select id="algorithmSelect">     
+        <option value="brightnessSort" selected>亮度排序映射</option>
+        <option value="kdTreeColor">颜色空间+KD树</option>
         <option value="greedyNN">贪婪最近邻</option>
         <option value="nearestColor">最近颜色匹配</option>
         <option value="voronoi">Voronoi区域匹配</option>
@@ -118,5 +123,8 @@
     </div>
 
     <script src="PicToPic.js"></script> 
+
+    <p>2026  Code by GKll44</p>
+    <a href="https://github.com/GKll44/PicToPic">Source code</a>
 </body>
 </html>
