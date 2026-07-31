@@ -173,10 +173,17 @@ function uploadPixelData(mapping, width, height) {
 
 function updatePointSize(width, height, canvasWidth, canvasHeight) {
     if (!gl || !shaderProgram) return;
+
+    // 修复：计算每个逻辑像素在 canvas 上占多少屏幕像素
+    // 使用 ceil 确保点足够大以覆盖整个区域，消除缝隙
     const scaleX = canvasWidth / width;
     const scaleY = canvasHeight / height;
     const pixelScale = Math.min(scaleX, scaleY);
-    const pointSize = Math.max(pixelScale, 1.0);
+
+    // 关键修复：使用 Math.ceil 向上取整，确保点覆盖整个像素区域
+    // 同时添加一个小的偏移量来补偿浮点精度问题
+    const pointSize = Math.max(Math.ceil(pixelScale + 0.5), 1.0);
+
     const uPointSize = gl.getUniformLocation(shaderProgram, 'u_pointSize');
     gl.uniform1f(uPointSize, pointSize);
 }
@@ -356,18 +363,6 @@ function getPixel(data, x, y, width) {
 }
 
 // ==================== 优化的像素匹配算法 ====================
-// 核心优化：
-// 1. 使用亮度分桶而非全局排序，保留空间局部性
-// 2. 使用KD-Tree加速最近邻搜索
-// 3. 预计算颜色距离避免重复平方根
-// 4. 多分辨率渐进匹配
-// 5. 使用TypedArray减少GC压力
-
-
-// ==================== 多种像素匹配算法 ====================
-
-
-
 
 // 算法2: 亮度排序映射
 function brightnessSortMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
@@ -439,7 +434,6 @@ function greedyNNMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
         }
     }
 
-    // 补充未映射的目标
     for (let ti = mapping.length; ti < targetPixels.length; ti++) {
         const tp = targetPixels[ti];
         const sp = sourcePixels[ti % sourcePixels.length];
@@ -455,24 +449,20 @@ function greedyNNMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
     return mapping;
 }
 
-
-// 算法3: 最近颜色匹配 - 纯颜色距离，不考虑空间位置
+// 算法3: 最近颜色匹配
 function nearestColorMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
     const mapping = [];
     const used = new Uint8Array(sourcePixels.length);
 
-    // 预计算源像素的颜色，避免重复访问
     for (let ti = 0; ti < targetPixels.length; ti++) {
         const tp = targetPixels[ti];
         let bestIdx = -1;
         let bestDist = Infinity;
 
-        // 遍历所有未使用的源像素，找颜色最接近的
         for (let si = 0; si < sourcePixels.length; si++) {
             if (used[si]) continue;
             const sp = sourcePixels[si];
 
-            // 纯颜色距离（RGB欧氏距离）
             const rDiff = sp.color[0] - tp.color[0];
             const gDiff = sp.color[1] - tp.color[1];
             const bDiff = sp.color[2] - tp.color[2];
@@ -497,7 +487,6 @@ function nearestColorMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
         }
     }
 
-    // 补充未映射的目标（如果源像素不够）
     for (let ti = mapping.length; ti < targetPixels.length; ti++) {
         const tp = targetPixels[ti];
         const sp = sourcePixels[ti % sourcePixels.length];
@@ -517,7 +506,6 @@ function nearestColorMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
 function voronoiMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
     const NUM_SITES = Math.min(16, Math.floor(Math.sqrt(sourcePixels.length)));
 
-    // 随机选择Voronoi中心点
     function pickSites(pixels, count, w, h) {
         const sites = [];
         const step = Math.floor(pixels.length / count);
@@ -536,7 +524,6 @@ function voronoiMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
     const sourceSites = pickSites(sourcePixels, NUM_SITES, sw, sh);
     const targetSites = pickSites(targetPixels, NUM_SITES, tw, th);
 
-    // 为每个像素分配Voronoi区域
     function assignRegions(pixels, sites, w, h, isSource) {
         const regions = new Array(sites.length).fill(null).map(() => []);
         for (const p of pixels) {
@@ -564,7 +551,6 @@ function voronoiMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
     const mapping = [];
     const used = new Uint8Array(sourcePixels.length);
 
-    // 在对应区域内匹配
     for (let r = 0; r < NUM_SITES; r++) {
         const sReg = sourceRegions[r];
         const tReg = targetRegions[r];
@@ -604,7 +590,6 @@ function voronoiMapping(sourcePixels, targetPixels, sw, sh, tw, th) {
         }
     }
 
-    // 未匹配的用全局兜底
     const unmatchedTargets = [];
     for (let r = 0; r < NUM_SITES; r++) {
         for (const tp of targetRegions[r]) {
@@ -667,36 +652,33 @@ function runMappingAlgorithm(algorithm, sourcePixels, targetPixels, sw, sh, tw, 
 
 function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, targetWidth, targetHeight) {
     const mapping = [];
-    const used = new Uint8Array(sourcePixels.length); // 0=未用, 1=已用
-    
-    // ===== 优化1: 构建空间KD-Tree索引 =====
-    // 使用扁平化数组存储KD-Tree节点，避免对象开销
+    const used = new Uint8Array(sourcePixels.length);
+
     class FlatKDTree {
         constructor(points, depth = 0) {
             this.points = points;
             this.depth = depth;
-            this.axis = depth % 2; // 0=x, 1=y
+            this.axis = depth % 2;
             this.median = -1;
             this.left = null;
             this.right = null;
             this.built = false;
         }
-        
+
         build() {
             if (this.points.length <= 8) {
                 this.built = true;
                 return;
             }
-            
-            // 按当前轴排序
+
             this.points.sort((a, b) => {
                 return this.axis === 0 ? a.origX - b.origX : a.origY - b.origY;
             });
-            
+
             this.median = Math.floor(this.points.length / 2);
             const leftPoints = this.points.slice(0, this.median);
             const rightPoints = this.points.slice(this.median + 1);
-            
+
             if (leftPoints.length > 0) {
                 this.left = new FlatKDTree(leftPoints, this.depth + 1);
                 this.left.build();
@@ -707,21 +689,19 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
             }
             this.built = true;
         }
-        
-        // 搜索最近邻，排除已用点
+
         nearest(targetX, targetY, best, used) {
             if (!this.built) return best;
-            
-            // 检查当前节点中的所有点（叶子节点或少量点）
+
             if (this.points.length <= 8 || this.median === -1) {
                 for (let i = 0; i < this.points.length; i++) {
                     const p = this.points[i];
                     if (used[p.idx]) continue;
-                    
+
                     const dx = p.origX - targetX;
                     const dy = p.origY - targetY;
                     const dist = dx * dx + dy * dy;
-                    
+
                     if (dist < best.dist) {
                         best.dist = dist;
                         best.idx = p.idx;
@@ -730,32 +710,28 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
                 }
                 return best;
             }
-            
-            // 决定搜索方向
+
             const medianPoint = this.points[this.median];
             const targetVal = this.axis === 0 ? targetX : targetY;
             const medianVal = this.axis === 0 ? medianPoint.origX : medianPoint.origY;
-            
+
             let first = this.left;
             let second = this.right;
-            
+
             if (targetVal > medianVal) {
                 first = this.right;
                 second = this.left;
             }
-            
-            // 搜索优先分支
+
             if (first) {
                 best = first.nearest(targetX, targetY, best, used);
             }
-            
-            // 检查是否需要搜索另一分支（剪枝）
+
             const diff = targetVal - medianVal;
             if (diff * diff < best.dist && second) {
                 best = second.nearest(targetX, targetY, best, used);
             }
-            
-            // 检查中位数点本身
+
             if (!used[medianPoint.idx]) {
                 const dx = medianPoint.origX - targetX;
                 const dy = medianPoint.origY - targetY;
@@ -766,33 +742,29 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
                     best.point = medianPoint;
                 }
             }
-            
+
             return best;
         }
     }
-    
-    // ===== 优化2: 颜色分桶加速 =====
-    // 将颜色空间划分为32×32×32的粗网格，优先在同色桶内搜索
-    const COLOR_BUCKET_BITS = 5; // 32 buckets per channel
+
+    const COLOR_BUCKET_BITS = 5;
     const COLOR_BUCKET_SIZE = 256 / (1 << COLOR_BUCKET_BITS);
-    
+
     function getColorBucket(r, g, b) {
         return ((r >> COLOR_BUCKET_BITS) << 10) | 
                ((g >> COLOR_BUCKET_BITS) << 5) | 
                (b >> COLOR_BUCKET_BITS);
     }
-    
-    // 构建颜色桶索引
+
     const colorBuckets = new Map();
     for (let i = 0; i < sourcePixels.length; i++) {
         const p = sourcePixels[i];
-        p.idx = i; // 添加索引引用
+        p.idx = i;
         const bucket = getColorBucket(p.color[0], p.color[1], p.color[2]);
         if (!colorBuckets.has(bucket)) colorBuckets.set(bucket, []);
         colorBuckets.get(bucket).push(p);
     }
-    
-    // ===== 优化3: 预计算目标像素颜色桶 =====
+
     const targetBuckets = [];
     for (let i = 0; i < targetPixels.length; i++) {
         const tp = targetPixels[i];
@@ -800,13 +772,7 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
         tp.bucket = getColorBucket(tp.color[0], tp.color[1], tp.color[2]);
         targetBuckets.push(tp);
     }
-    
-    // ===== 优化4: 多轮匹配策略 =====
-    // 第一轮：颜色桶精确匹配 + KD-Tree空间优化
-    // 第二轮：邻近颜色桶扩展搜索
-    // 第三轮：全局KD-Tree兜底
-    
-    // 为每个颜色桶构建KD-Tree
+
     const bucketTrees = new Map();
     for (const [bucket, points] of colorBuckets) {
         if (points.length > 0) {
@@ -815,60 +781,54 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
             bucketTrees.set(bucket, tree);
         }
     }
-    
-    // 构建全局KD-Tree（用于fallback）
+
     const globalTree = new FlatKDTree([...sourcePixels], 0);
     globalTree.build();
-    
-    // 匹配过程
+
     const unmappedTargets = [];
-    
+
     for (let i = 0; i < targetBuckets.length; i++) {
         const tp = targetBuckets[i];
         let bestIdx = -1;
         let bestScore = Infinity;
         let bestSource = null;
-        
-        // 策略1: 在同色桶内搜索
+
         const sameBucket = bucketTrees.get(tp.bucket);
         if (sameBucket) {
             const result = sameBucket.nearest(tp.x, tp.y, { dist: Infinity, idx: -1, point: null }, used);
             if (result.idx !== -1) {
                 bestIdx = result.idx;
                 bestSource = result.point;
-                bestScore = 0; // 颜色完全匹配（同桶）
+                bestScore = 0;
             }
         }
-        
-        // 策略2: 如果同色桶没找到或空间距离太远，搜索邻近颜色桶
+
         if (bestIdx === -1) {
             const br = (tp.color[0] >> COLOR_BUCKET_BITS);
             const bg = (tp.color[1] >> COLOR_BUCKET_BITS);
             const bb = (tp.color[2] >> COLOR_BUCKET_BITS);
-            
-            // 搜索3×3×3颜色邻域
+
             for (let dr = -1; dr <= 1 && bestIdx === -1; dr++) {
                 for (let dg = -1; dg <= 1 && bestIdx === -1; dg++) {
                     for (let db = -1; db <= 1 && bestIdx === -1; db++) {
                         const nr = br + dr, ng = bg + dg, nb = bb + db;
                         if (nr < 0 || nr >= 32 || ng < 0 || ng >= 32 || nb < 0 || nb >= 32) continue;
-                        
+
                         const neighborBucket = (nr << 10) | (ng << 5) | nb;
                         const tree = bucketTrees.get(neighborBucket);
                         if (!tree) continue;
-                        
+
                         const result = tree.nearest(tp.x, tp.y, { dist: Infinity, idx: -1, point: null }, used);
                         if (result.idx !== -1) {
-                            // 计算颜色距离惩罚
                             const sp = result.point;
                             const rDiff = tp.color[0] - sp.color[0];
                             const gDiff = tp.color[1] - sp.color[1];
                             const bDiff = tp.color[2] - sp.color[2];
                             const colorPenalty = (rDiff * rDiff + gDiff * gDiff + bDiff * bDiff) * 0.01;
-                            
+
                             const spatialDist = result.dist;
                             const score = spatialDist + colorPenalty;
-                            
+
                             if (score < bestScore) {
                                 bestScore = score;
                                 bestIdx = result.idx;
@@ -879,8 +839,7 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
                 }
             }
         }
-        
-        // 策略3: 全局搜索兜底
+
         if (bestIdx === -1) {
             const result = globalTree.nearest(tp.x, tp.y, { dist: Infinity, idx: -1, point: null }, used);
             if (result.idx !== -1) {
@@ -888,7 +847,7 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
                 bestSource = result.point;
             }
         }
-        
+
         if (bestIdx !== -1) {
             used[bestIdx] = 1;
             mapping.push({
@@ -902,10 +861,8 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
             unmappedTargets.push(tp);
         }
     }
-    
-    // 处理未映射的目标（复制最近的已用源像素）
+
     for (const tp of unmappedTargets) {
-        // 找到空间上最近的已用源像素
         let nearestDist = Infinity;
         let nearestSource = null;
         for (let i = 0; i < sourcePixels.length; i++) {
@@ -930,7 +887,7 @@ function optimizeMapping(sourcePixels, targetPixels, sourceWidth, sourceHeight, 
             });
         }
     }
-    
+
     return mapping;
 }
 
@@ -967,9 +924,10 @@ async function startConversion(autoPreview = false) {
     stretchCtx.drawImage(targetCanvas, 0, 0, width, height);
     const stretchedTargetImage = stretchCtx.getImageData(0, 0, width, height);
 
+    // 修复：确保 canvas 尺寸为整数，避免奇数尺寸导致的缝隙
     const displayScale = Math.min(500 / width, 500 / height, 15);
-    previewCanvas.width = width * displayScale;
-    previewCanvas.height = height * displayScale;
+    previewCanvas.width = Math.round(width * displayScale);
+    previewCanvas.height = Math.round(height * displayScale);
 
     if (!gl) {
         if (!initWebGL(previewCanvas)) {
@@ -1015,15 +973,12 @@ async function startConversion(autoPreview = false) {
 
         if (progress) progress.textContent = `源图: ${sourcePixels.length}像素, 目标: ${targetPixels.length}像素 - 开始匹配...`;
 
-        // 像素数量平衡：如果源图像素多于目标，随机采样保持空间分布
         let matchedSources = sourcePixels;
         if (sourcePixels.length > targetPixels.length) {
-            // 使用网格采样保持空间分布，而非随机打乱
             const ratio = targetPixels.length / sourcePixels.length;
             matchedSources = [];
             for (let y = 0; y < sh; y++) {
                 for (let x = 0; x < sw; x++) {
-                    // 基于坐标的确定性采样，保持空间连续性
                     const hash = ((x * 73856093) ^ (y * 19349663)) & 0xFFFFFFFF;
                     if ((hash / 0xFFFFFFFF) < ratio) {
                         const idx = y * sw + x;
@@ -1033,12 +988,10 @@ async function startConversion(autoPreview = false) {
                     }
                 }
             }
-            // 如果采样不足，补充随机点
             while (matchedSources.length < targetPixels.length) {
                 const idx = Math.floor(Math.random() * sourcePixels.length);
                 matchedSources.push(sourcePixels[idx]);
             }
-            // 如果采样过多，截断
             if (matchedSources.length > targetPixels.length) {
                 matchedSources.length = targetPixels.length;
             }
